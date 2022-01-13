@@ -41,7 +41,7 @@ __all__ = ["TreeExplainer", "MultiInterval"]
 if LooseVersion(sklearn.__version__) < LooseVersion("0.17"):
     raise Exception("TreeExplainer requires scikit-learn 0.17 or later")
 
-def MultiInterval(y, x, criterion="iv", equal_width=False, bins="fd", 
+def MultiInterval(y, x, criterion="iv", equal_width=True, bins="fd", 
                   min_pct=0.05, min_cls=0.05, trend="auto"):
 
     '''
@@ -67,7 +67,7 @@ def MultiInterval(y, x, criterion="iv", equal_width=False, bins="fd",
         criteria are "iv" for the information value, "gini" for the Gini 
         impurity and "entropy" for the information gain. 
         
-    equal_width : bool, default=False
+    equal_width : bool, default=True
         If True, it uses equal-width binning, otherwise equal-sample 
         binning is used instead. 
         
