@@ -911,13 +911,17 @@ def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5,
     # ===============================================================
     # Instantiate and fit the KDE model
     twinx_ax, max_pdf = ax.twinx(), 0
+    bandwidth = np.diff(np.histogram_bin_edges(x, bins="fd"))[0]
+    kde_kwds  = {"bandwidth": bandwidth, "kernel": 'gaussian'}
+    if kernel_kwds is not None: kde_kwds.update(kernel_kwds)
+    # ---------------------------------------------------------------
     if (by_class==False) | (classifier==False):
-        z, pdf  = __kde__(x, kernel_kwds)
+        z, pdf  = __kde__(x, kde_kwds)
         max_pdf = max(pdf)
         twinx_ax.fill_between(z, pdf, **dict(color="grey", alpha=0.3))
     else:
         for n in np.unique(y):
-            z, pdf = __kde__(x[y==n], kernel_kwds)
+            z, pdf = __kde__(x[y==n], kde_kwds)
             kwds = dict(color=colors[n], alpha=0.3)
             if fill_kwds is not None: kwds.update(fill_kwds)
             twinx_ax.fill_between(z, pdf, **kwds)
@@ -934,6 +938,7 @@ def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5,
     twiny_ax, max_pdf = ax.twiny(), 0
     bandwidth = np.diff(np.histogram_bin_edges(dfc, bins="fd"))[0]
     kde_kwds  = {"bandwidth": bandwidth, "kernel": 'gaussian'}
+    if kernel_kwds is not None: kde_kwds.update(kernel_kwds)
     # ---------------------------------------------------------------
     if classifier:
         for n in np.unique(y):
