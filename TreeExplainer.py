@@ -397,8 +397,11 @@ def sub_intervals(x, bins="fd", equal_width=True):
             return np.linspace(a_min, a_max, bins+1)
         else: return np.histogram_bin_edges(x, bins=bins) 
     else: # Equal sample
-        q = np.linspace(0, 100, bins+1)
-        return np.unique(np.percentile(x, q))
+        if isinstance(bins, int):
+            q = np.linspace(0, 100, bins+1)
+            return np.unique(np.percentile(x, q))
+        else: raise ValueError(f"When `equal_width` is False, bin must be" 
+                               f"positive integer. Got {bins} instead.")
 
 def Entropy(y, x, cutoff=None):
 
