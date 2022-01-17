@@ -112,15 +112,14 @@ def MultiInterval(y, x, criterion="iv", equal_width=True, bins="fd",
             "trend"   : trend,
             "criterion"   : criterion, 
             "equal_width" : equal_width}
-    
+
     result = OptimalCutoff(y, x, **kwds)
     if result.cutoff is not None: 
+        
+        # Initial bin_edges.
         bin_edges = [r_min, result.cutoff, r_max]
         kwds.update({"trend" : result.trend})
-    else: bin_edges = [r_min, r_max]
     
-    if len(bin_edges) > 2:
-        
         while True:
             n_bins, new_bin_edges = len(bin_edges), []
             for n in range(n_bins-1):
@@ -134,8 +133,12 @@ def MultiInterval(y, x, criterion="iv", equal_width=True, bins="fd",
             bin_edges  = np.unique(bin_edges).tolist() 
             if (len(bin_edges)==n_bins) | (len(bin_edges)<4): break
                 
-    else: bin_edges = np.unique([r_min, np.nanmedian(x), r_max])
-        
+    else:
+        mid_point = np.nanmedian(x)
+        if (mid_point!=r_min) & (mid_point!=r_max):
+            bin_edges = [r_min, mid_point, r_max]
+        else: bin_edges = [r_min, np.nanmean(x), r_max]
+    
     return monotonic_woe(y, x, bin_edges)
 
 def monotonic_woe(y, x, bins):
@@ -193,8 +196,8 @@ def monotonic_woe(y, x, bins):
         index = np.hstack(([True], index, [True]))
         # ---------------------------------------------------
         # Keep bin edges that follow the trend.
-        bin_edges = bin_edges[index]
-        if (len(bin_edges)==n_bins)|(len(bin_edges)<3):break
+        if len(bin_edges)>3: bin_edges = bin_edges[index]
+        if (len(bin_edges)==n_bins)|(len(bin_edges)<4):break
         # ===================================================
   
     keys = ['woe', 'iv', 'target', 'bin_edges']
@@ -287,13 +290,17 @@ def OptimalCutoff(y, x, r_min=None, r_max=None, criterion="iv",
     # Determine cutoffs.
     cutoffs = sub_intervals(x0, bins, equal_width)
     left_woe, right_woe, new_cutoff, gain = [],[],[],[]
-
+    
+    # Precompute beginning value.
+    if criterion == 'entropy': Begin = Entropy(y0, x0)
+    elif criterion == 'gini' : Begin = GiniImpurity(y0, x0)
+ 
     if len(cutoffs)-2 > 0:
 
         for cutoff in cutoffs[1:-1]:
 
-            p_dist0 = [sum((y0[x0< cutoff]==n)/n_samples[n]) for n in [0,1]]
-            p_dist1 = [sum((y0[x0>=cutoff]==n)/n_samples[n]) for n in [0,1]]
+            left_dist  = [sum((y0[x0< cutoff]==n)/n_samples[n]) for n in [0,1]]
+            right_dist = [sum((y0[x0>=cutoff]==n)/n_samples[n]) for n in [0,1]]
 
             # =======================================================
             # In order for WOE to be valid, 2 following conditions 
@@ -305,31 +312,25 @@ def OptimalCutoff(y, x, r_min=None, r_max=None, criterion="iv",
             # -------------------------------------------------------
             cond1 = (min_pct <= min(sum(x0<cutoff), 
                                     sum(x0>=cutoff))/len(y))
-            cond2 = (min_cls <= min(p_dist0[0], p_dist1[0]))
-            cond3 = (min_cls <= min(p_dist0[1], p_dist1[1]))
+            cond2 = (min_cls <= min(left_dist[0], right_dist[0]))
+            cond3 = (min_cls <= min(left_dist[1], right_dist[1]))
             # =======================================================
 
             if (cond1 & cond2 & cond3):
-                
-                left_woe   += [WOEs(*p_dist0)]
-                right_woe  += [WOEs(*p_dist1)]
+
+                left_woe   += [WOEs(*left_dist)]
+                right_woe  += [WOEs(*right_dist)]
                 new_cutoff += [cutoff]
 
-                # ==============================================
+                # ================================================
                 if criterion == 'iv': 
-                    gain += [IVs(*p_dist0) + IVs(*p_dist1)]
-                # ----------------------------------------------
+                    gain += [IVs(*left_dist) + IVs(*right_dist)]
                 elif criterion == 'entropy':
-                    Begin = Entropy(y0, x0)
-                    Split = Entropy(y0, x0, cutoff)
-                    gain += [Begin - Split]
-                # ----------------------------------------------
+                    gain += [Begin - Entropy(y0, x0, cutoff)]
                 elif criterion == 'gini':
-                    begin = self._gini(y, x)[1]
-                    split = self._gini(y, x, cutoff)[1]
-                    gain += [Begin - Split]
+                    gain += [Begin - GiniImpurity(y0, x0, cutoff)]
                 else: pass
-                # ==============================================
+                # ================================================
                 
     else: pass
       
@@ -354,12 +355,14 @@ def OptimalCutoff(y, x, r_min=None, r_max=None, criterion="iv",
         index = direction==(0. if (corr < 0.5) else 1.)
         # -------------------------------------------------------
         if sum(index)>0: # solution must exist
-            best_index = index & (gain==max(gain[index]))
+            if max(gain)>0: # gain must be greater than 0.
+                best_index = index & (gain==max(gain[index]))
+            else: best_index = None
         else: best_index = None
         # =======================================================
         
     else: best_index = None
-
+    
     keys = ['left_woe', 'right_woe', 'cutoff', 'gain', 'trend']
     Results = collections.namedtuple('Results', keys)
     if best_index is None: return Results(*((None,)*5))
@@ -431,12 +434,13 @@ def Entropy(y, x, cutoff=None):
     x0 = x[~np.isnan(x)].astype(float).copy()
     y0 = y[~np.isnan(x)].astype(int).copy()
     if cutoff==None: cutoff=max(x0)
-        
+
     entropy = 0
     for cond in [(x0<cutoff), (x0>=cutoff)]:
         P = np.bincount(y0[cond])/sum(cond)
-        value  = -sum(P * np.log2(P))
-        entropy += (len(y0[cond])/len(y0)) * value
+        value = -sum(P[P>0] * np.log2(P[P>0])) if len(P)>0 else 0 
+        entropy += (sum(cond)/len(y0)) * value
+
     return entropy
 
 def GiniImpurity(y, x, cutoff=None):
@@ -1522,8 +1526,8 @@ def _predict_forest(estimators, X):
 
     return mean_pred, mean_bias, mean_contribs
 
-def __Calculate_Bins__(X, y, contributions, kwds=None):
-        
+def __Calculate_Bins__(X, y, contributions, categories, kwds=None):
+
     '''Private function: pre-calculate bins'''
     kwds = {} if kwds is None else kwds
     kwds = {"criterion"  : kwds.get("criterion", "iv"), 
@@ -1535,12 +1539,16 @@ def __Calculate_Bins__(X, y, contributions, kwds=None):
     y = y.copy()
 
     for var in features:
-        x   = X[var].values.copy()
-        dfc = contributions[:, features==var].ravel().copy()
-        _ , _ , coef = __robust__(x, y, dfc)
-        trend = "upward" if coef<=0 else "downward"
-        kwds.update(dict(trend=trend))
-        bins += [(var, MultiInterval(y, x, **kwds).bin_edges)]
+        x = X[var].values.copy()
+        if var not in categories:
+            dfc = contributions[:, features==var].ravel().copy()
+            _ , _ , coef = __robust__(x, y, dfc)
+            trend = "upward" if coef<=0 else "downward"
+            kwds.update(dict(trend=trend))
+            bins += [(var, MultiInterval(y, x, **kwds).bin_edges)]
+        else: 
+            amax = max(x) + np.finfo("float32").eps
+            bins += [(var, np.unique(x),    )]
 
     return dict(bins)
 
@@ -1551,11 +1559,11 @@ class TreeExplainer:
     
     Parameters
     ----------
-    estimator : estimator object
+    estimator : fitted estimator object
         The object must be the following scikit-learn estimator:
         - DecisionTreeRegressor
         - DecisionTreeClassifier
-        - ExtraTreeRegressor
+        - ExcategoriestraTreeRegressor
         - ExtraTreeClassifier
         - RandomForestRegressor
         - RandomForestClassifier
@@ -1589,7 +1597,7 @@ class TreeExplainer:
         if isinstance(multi_kwds, dict): self.kwds = {**default, **multi_kwds}
         self.kwds = default
         
-    def fit(self, X, y=None, bins=None):
+    def fit(self, X, y=None, bins=None, categories=None):
         
         '''
         Determine a tuple of (prediction, bias, feature_contributions), 
@@ -1612,6 +1620,10 @@ class TreeExplainer:
             algorithm uses "MultiInterval" (supervised binning). This is 
             relevant when `y` with binary classes is provided, otherwise 
             it defaults to 10 equal-width bins.
+            
+        categories : list of str, default=None
+            List of categorical variables. All values of the categorical 
+            are treated as categories.  
 
         Attributes
         ----------
@@ -1637,6 +1649,7 @@ class TreeExplainer:
         
         if y is None: self.y = np.full(len(X), 0)
         else: self.y = np.array(y).ravel().astype(int).copy()
+        self.categories = [] if categories is None else list(categories)
         
         base_estimators = (DecisionTreeClassifier, DecisionTreeRegressor)
         if isinstance(self.estimator, base_estimators):
@@ -1647,15 +1660,22 @@ class TreeExplainer:
         # Only select contribution wrt. target (1)
         if self.classifier: self.contributions = self.contributions[:,:,1]
         
+        # Binning: classifer
         if (bins is None) & (self.y.sum()>0) & self.classifier:
-            args = (X, self.y, self.contributions, self.kwds)
+            
+            args = (X, self.y, self.contributions, self.categories, self.kwds)
             self.bins = __Calculate_Bins__(*args)
+        
         elif (bins is None) & ((self.y.sum()==0) | (self.classifier==False)):
+            
             self.bins = dict()
             for var in list(self.X):
-                bin_edges = np.histogram_bin_edges(X[var], bins=10)
-                bin_edges[-1] += np.finfo("float32").eps
+                if var not in self.categories:
+                    bin_edges = np.histogram_bin_edges(X[var], bins=10)
+                    bin_edges[-1] += np.finfo("float32").eps
+                else: bin_edges = np.hstack((np.unique(X[var]), max(X[var])+1))
                 self.bins[var] = bin_edges
+                
         else: self.bins = bins
         
         return self
