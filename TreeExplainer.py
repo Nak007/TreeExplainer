@@ -16,6 +16,8 @@ from matplotlib.ticker import(FixedLocator,
                               FixedFormatter, 
                               StrMethodFormatter,
                               FuncFormatter)
+from matplotlib.patches import Patch, FancyArrowPatch
+from matplotlib.lines import Line2D
 
 import sklearn
 from sklearn.ensemble import (RandomForestClassifier, 
@@ -760,15 +762,15 @@ def waterfall_base(biases, contributions, X, y, index=0, sort_by=None,
     
     return ax
 
-def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5, 
-                 kernel_kwds=None, scatter_kwds=None, plot_kwds=None, 
-                 fill_kwds=None, colors=None, tight_layout=True, frac=1, 
-                 random_state=0, epsilon=1.35, by_class=False, 
-                 classifier=True):
+def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, 
+                 whis=1.5, kernel_kwds=None, scatter_kwds=None, 
+                 patch_kwds=None, fill_kwds=None, colors=None, 
+                 tight_layout=True, frac=1, random_state=0, epsilon=1.35, 
+                 by_class=False, classifier=True, draw_trend=True, dx=0.):
         
     '''
-    Plot scatter between directional feature contributions (y) and 
-    selected variable (X[var]).
+    Plot scatter between directional feature contributions `y` and 
+    selected variable `var`.
 
     Parameters
     ----------
@@ -806,8 +808,9 @@ def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5,
     scatter_kwds : keywords, default=None
         Keyword arguments to be passed to "ax.scatter".
 
-    plot_kwds : keywords, default=None
-        Keyword arguments to be passed to "ax.plot".
+    patch_kwds : keywords, default=None
+        Keyword arguments to be passed to "FancyArrowPatch". This is 
+        relevant when `draw_trend` is True.
 
     fill_kwds : keywords, default=None
         Keyword arguments to be passed to "ax.fill_between".
@@ -844,6 +847,13 @@ def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5,
         If True, it assumes the feature contributions are extracted
         from DecisionTreeClassifier, otherwise DecisionTreeRegressor.
         
+    draw_trend : bool, default=True
+        If True, a linear trend line is drawn.
+        
+    dx : float, default=0.
+        The length from x i.e. x - dx0 for "Class 0", and x + dx1 for
+        "Class 1".
+        
     References
     ----------
     .. [1] https://github.com/andosa/treeinterpreter
@@ -863,7 +873,7 @@ def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5,
                          f"{features}. Got {var} instead.")
     # ---------------------------------------------------------------
     # Default ax and colors.  
-    if ax is None: ax = ax = plt.subplots(figsize=(7, 5))[1] 
+    if ax is None: ax = plt.subplots(figsize=(7, 5))[1] 
     colors = ([ax._get_lines.get_next_color() for _ in range(3)] 
               if colors is None else colors)
     # ===============================================================
@@ -887,25 +897,16 @@ def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5,
     # ===============================================================
     kwds = dict(facecolor="none", marker='o', 
                 alpha=0.9, s=12, linewidth=1)
-    if scatter_kwds is not None: kwds = {**kwds, **scatter_kwds}
+    if scatter_kwds is not None: kwds = {**kwds, **scatter_kwds}   
+    dx = np.array([-1, 1]) * dx
     if classifier:
         for n in range(n_labels):
-            label = f"Class ({n})" if n_labels==2 else None
+            label = f"Class {n}" if n_labels==2 else None
             kwds  = {**kwds, **dict(ec=colors[n], label=label)}
-            ax.scatter(x[(y==n) & indices], 
+            ax.scatter(x[(y==n) & indices] + dx[n], 
                        dfc[(y==n) & indices], **kwds)
     else: ax.scatter(x[indices], dfc[indices], 
                      **{**kwds, **dict(ec=colors[0])})
-    # ===============================================================
-
-    # Trend line
-    # ===============================================================
-    # Robust regression (Huber)
-    robust_x, robust_y, coef = __robust__(x, y, dfc)
-    kwds = dict(linewidth=2, linestyle="-")
-    if plot_kwds is not None: kwds = {**kwds, **plot_kwds}
-    kwds.update(color=colors[2], label="Trend")
-    ax.plot(robust_x, robust_y,**kwds)
     # ---------------------------------------------------------------
     scale = 0.9
     x_min, x_max = ax.get_xlim()
@@ -971,6 +972,33 @@ def scatter_base(contributions, X, y, var, ax=None, no_outliers=True, whis=1.5,
     twiny_ax.set_xlim(0, max_pdf/(1-scale))
     # ===============================================================
     
+    # Trend line
+    # ===============================================================
+    # Robust regression (Huber)
+    if draw_trend:
+        robust_x, robust_y, coef = __robust__(x, y, dfc)
+        intercept = robust_y[0] - coef * robust_x[0] 
+        x_min, x_max = min(x), ax.get_xlim()[1]
+        y_min, y_max = ax.get_ylim()
+        ctr_x = (x_max - x_min)/2 + x_min
+        ctr_y = (y_max - y_min)/2 + y_min
+        dy = ctr_y - (ctr_x * coef + intercept)
+        dx = 0.35 * (x_max - x_min)
+    # ---------------------------------------------------------------   
+        x_tail = ctr_x - dx
+        y_tail = x_tail * coef + intercept + dy
+        x_head = ctr_x + dx
+        y_head = x_head * coef + intercept + dy
+    # ---------------------------------------------------------------  
+        args = ((x_tail, y_tail), (x_head, y_head))
+        kwargs = dict(mutation_scale=75, edgecolor="k", 
+                      alpha=0.5, facecolor=colors[2], zorder=10, 
+                      label="Trend ({:+,.2g})".format(coef))
+        if patch_kwds is not None: kwargs.update(patch_kwds)
+        ax.add_patch(FancyArrowPatch(*args, **kwargs))
+    # ===============================================================
+    
+    # Set other attributes
     # ===============================================================
     # Set annotation
     pdata = "Data point: {:.2%}".format(len(x)/n_samples)
@@ -1124,7 +1152,7 @@ def __IQR__(a, whis):
 
 def boxplot_base(contributions, X, y, var, bins, ax=None, 
                  whis=1.5, colors=None, tight_layout=True, 
-                 classifier=True):
+                 classifier=True, by_class=False):
     
     '''
     Make a box and whisker plot using Matplotlib boxplot.
@@ -1146,7 +1174,9 @@ def boxplot_base(contributions, X, y, var, bins, ax=None,
     
     bins : sequence of scalars
         Sequence of scalars must be a monotonically increasing array 
-        of bin edges, including the rightmost edge.
+        of bin edges, including the rightmost edge. The number belongs 
+        to ith bin when it saftifyies the following condition: bins[i] 
+        <= x < bins[i+1].
 
     ax : Matplotlib axis object, default=None
         Predefined Matplotlib axis. If None, it defaults to 
@@ -1160,9 +1190,9 @@ def boxplot_base(contributions, X, y, var, bins, ax=None,
     
     colors : list of color-hex, default=None
         Color-hex must be arranged in the follwoing order i.e. 
-        ["Boxplot", "% Target"]. If None, it uses default colors from 
-        Matplotlib.
-        
+        ["Class 0", "Class 1", "% Target"]. If None, it uses default 
+        colors from Matplotlib.
+
     tight_layout : bool, default=True
         If True, it adjusts the padding between and around subplots 
         i.e. plt.tight_layout().
@@ -1170,6 +1200,9 @@ def boxplot_base(contributions, X, y, var, bins, ax=None,
     classifier : bool, default=True
         If True, it assumes the feature contributions are extracted
         from DecisionTreeClassifier, otherwise DecisionTreeRegressor.
+    
+    by_class : bool, default=False
+        If True, it displays box-plot for respective classes. 
         
     References
     ----------
@@ -1190,46 +1223,50 @@ def boxplot_base(contributions, X, y, var, bins, ax=None,
     contrib = pd.DataFrame(contributions, columns=features)
     # Indices of the bins to which each value in input array belongs.
     indices = np.digitize(X[var], bins).copy() 
-    x, patches, labels = [], [], []
-    # ---------------------------------------------------------------
-    # Split data according to labels.
-    for i in np.unique(indices):
-        values = contrib.loc[indices==i, var].values
-        x.append(values if len(values)>0 else [0])  
-    # ---------------------------------------------------------------   
+    patches, labels = [], []
+    # --------------------------------------------------------------- 
     # Default axis
     if ax is None:
         figsize = (max(len(np.unique(indices)) * 0.85, 6.5), 4.5)
         ax = plt.subplots(figsize=figsize)[1]
     # ---------------------------------------------------------------
-    # Default colors.   
-    colors = ([ax._get_lines.get_next_color() for _ in range(2)] 
-              if colors is None else colors) 
+    # Default colors.
+    if colors is None:
+        colors  = [ax._get_lines.get_next_color() for _ in range(2)]
+        colors += [colors[-1]]
     # ===============================================================
     
     # Box plot
     # ===============================================================
     # Parameters (ax.boxplot)
-    positions = np.arange(len(x)) + 1
+    positions = np.arange(len(np.unique(indices))) + 1
     kwds = dict(notch=False, vert=True, patch_artist=True, widths=0.8, 
                 whis=whis, sym="", positions=positions)
-    for prop in ["medianprops","capprops","whiskerprops","boxprops"]:
-        kwds.update({prop : dict(linewidth=1.5, color=colors[0])})
+    properties = ["medianprops","capprops","whiskerprops","boxprops"]
     # ---------------------------------------------------------------
-    # Set patch parameters (1st layer, background)
-    for patch in ax.boxplot(x, **kwds)["boxes"]:
-        patch.set_edgecolor("none")
-        patch.set_facecolor(colors[0])
-        patch.set_alpha(0.4)
-    patches += [patch]
-    labels  += ["Contribution"]
-    # ---------------------------------------------------------------
-    # Set patch parameters (2nd layer, foreground)
-    for patch in ax.boxplot(x, **kwds)["boxes"]:
-        patch.set_edgecolor(colors[0])
-        patch.set_facecolor("none")
+    if by_class & classifier:
+        for c in range(2):
+            x = []
+            for i in np.unique(indices):
+                values = contrib.loc[(indices==i) & (y==c),var].values
+                x.append(values if len(values)>0 else [0]) 
+            ax, patch = __boxplot__(ax, x, colors[c], whis, 
+                                    by_class, left=(c==0))
+            patches += [patch]
+            labels  += [f"Class {c}"]
+    # ---------------------------------------------------------------    
+    else:
+        # Split data according to index.
+        x = []
+        for i in np.unique(indices):
+            values = contrib.loc[indices==i, var].values
+            x.append(values if len(values)>0 else [0]) 
+    # ---------------------------------------------------------------  
+        ax, patch = __boxplot__(ax, x, colors[0], whis, False)
+        patches += [patch]
+        labels  += ["Contribution"]
     # ===============================================================
-    
+
     # Tick labels
     # ===============================================================
     ylabel = 'Directional Feature\nContributions (DFC)'
@@ -1244,7 +1281,7 @@ def boxplot_base(contributions, X, y, var, bins, ax=None,
     ax.set_xticklabels(["{:.3g}".format(s) for s in bins[1:]])
     ax.tick_params(axis='both', labelsize=10.5)
     # ---------------------------------------------------------------
-    if n_labels == 2:
+    if (n_labels == 2) & classifier:
         scale = 0.85
         y_min, y_max = ax.get_ylim()
         ax.set_ylim(y_max-(y_max-y_min)/scale, y_max)
@@ -1275,22 +1312,24 @@ def boxplot_base(contributions, X, y, var, bins, ax=None,
     
     # % Target
     # ===============================================================
-    if (n_labels == 2) & classifier:
+    if (n_labels==2) & classifier:
         twinx_ax = ax.twinx()
         p_target = [y[indices==i].mean() for i in np.unique(indices)]
         # 1st layer, background 
-        bar = twinx_ax.bar(positions, p_target, linewidth=0, 
-                           width=0.8, color=colors[1], alpha=0.4)
+        bar0 = twinx_ax.bar(positions, p_target, linewidth=0, 
+                            width=0.8, color=colors[2], alpha=0.4)
         # 2nd layer, foreground w/ edgecolor
-        twinx_ax.bar(positions, p_target, linewidth=1.5, width=0.8,
-                     facecolor="none", edgecolor=colors[1])
-        patches += [bar[0]]
+        bar1 = twinx_ax.bar(positions, p_target, linewidth=1.5, 
+                            width=0.8, facecolor="none", 
+                            edgecolor=colors[2])
+        
+        patches += [(bar0[0], bar1[0])]
         labels  += ["% Target"]
     # ---------------------------------------------------------------
         bbox = bbox=dict(boxstyle="square", alpha=0.8, pad=0.1, 
                          edgecolor="none", facecolor="white")
         anno_kwds = dict(textcoords='offset points', xytext=(0,3), 
-                         va="bottom", ha="center", color=colors[1], 
+                         va="bottom", ha="center", color=colors[2], 
                          fontsize=12)
         for n,r in enumerate(p_target, 1):
             twinx_ax.annotate("{:,.0%}".format(r),(n,r),**anno_kwds)
@@ -1318,13 +1357,46 @@ def boxplot_base(contributions, X, y, var, bins, ax=None,
                 if w <= scale: break
     # ---------------------------------------------------------------
     ax.legend(patches, labels, loc='upper right', edgecolor="none",
-              prop=dict(weight="ultralight", size=12), ncol=2, 
-              borderaxespad=0.2, bbox_to_anchor=(1, 1.07), 
-              columnspacing=0.5, handletextpad=0.5)
+              prop=dict(weight="ultralight", size=12), 
+              ncol=len(labels), borderaxespad=0.2, 
+              bbox_to_anchor=(1, 1.07), columnspacing=0.5, 
+              handletextpad=0.5)
     if tight_layout: plt.tight_layout()
     # ===============================================================
   
     return ax
+
+def __boxplot__(ax, x, color, whis, by_class=False, left=True):
+    
+    '''Private function: ax.boxplot'''
+    # ===============================================================
+    position, width, p, dx = np.arange(len(x)) + 1, 0.8, 0.1, 0
+    if by_class:
+        width = width * (1 - p)/2
+        dx = (0.05 + width/2) * (-1 if left else 1)
+    # ---------------------------------------------------------------
+    # Update other properties.
+    kwds = dict(notch=False, vert=True, patch_artist=True, sym="",
+                widths=width, whis=whis, positions=position + dx)
+    for prop in ["medianprops","capprops","whiskerprops","boxprops"]:
+        kwds.update({prop : dict(linewidth=1.5, color=color)})
+    # ---------------------------------------------------------------    
+    # Set patch parameters (1st layer, background)
+    for patch in ax.boxplot(x, **kwds)["boxes"]:
+        patch.set_edgecolor("none")
+        patch.set_facecolor(color)
+        patch.set_alpha(0.4)
+    patch0 = patch
+    # ---------------------------------------------------------------
+    # Set patch parameters (2nd layer, foreground)
+    for patch in ax.boxplot(x, **kwds)["boxes"]:
+        patch.set_edgecolor(color)
+        patch.set_facecolor("none")
+    patch1 = patch
+    patch2 = Line2D([0], [0], color=color, linewidth=1.5)
+    # ===============================================================
+
+    return ax, (patch0, patch1, patch2)
 
 def find_tree_paths(tree, node_id=0):
     
@@ -1438,7 +1510,7 @@ def _predict_tree(Tree, X):
     # Convert into python list, accessing values will be faster
     values_list = list(values)
     feature_index = list(Tree.tree_.feature)
-    unq_leaves  = np.unique(leaves)
+    unq_leaves = np.unique(leaves)
     unq_contribs = {}
 
     for leaf in unq_leaves:
@@ -1547,8 +1619,9 @@ def __Calculate_Bins__(X, y, contributions, categories, kwds=None):
             kwds.update(dict(trend=trend))
             bins += [(var, MultiInterval(y, x, **kwds).bin_edges)]
         else: 
+            np.hstack((np.unique(x), max(x)+1))
             amax = max(x) + np.finfo("float32").eps
-            bins += [(var, np.unique(x),    )]
+            bins += [(var, np.hstack((np.unique(x), max(x)+1)))]
 
     return dict(bins)
 
@@ -1619,7 +1692,9 @@ class TreeExplainer:
             rightmost edge i.e. {"feature" : [0, 1, 2, ...]}. If None,
             algorithm uses "MultiInterval" (supervised binning). This is 
             relevant when `y` with binary classes is provided, otherwise 
-            it defaults to 10 equal-width bins.
+            it defaults to 10 equal-width bins. The number belongs to ith
+            bin when it saftifyies the following condition: bins[i] <= x 
+            < bins[i+1].
             
         categories : list of str, default=None
             List of categorical variables. All values of the categorical 
@@ -1754,9 +1829,10 @@ class TreeExplainer:
         return ax
   
     def scatter(self, var, ax=None, no_outliers=True, whis=1.5, 
-                kernel_kwds=None, scatter_kwds=None, plot_kwds=None, 
+                kernel_kwds=None, scatter_kwds=None, patch_kwds=None, 
                 fill_kwds=None, colors=None, tight_layout=True, 
-                frac=1, random_state=0, epsilon=1.35, by_class=False):
+                frac=1, random_state=0, epsilon=1.35, by_class=False, 
+                draw_trend=True):
         
         '''
         Plot scatter between directional feature contributions (y) and 
@@ -1788,8 +1864,9 @@ class TreeExplainer:
         scatter_kwds : keywords, default=None
             Keyword arguments to be passed to "ax.scatter".
 
-        plot_kwds : keywords, default=None
-            Keyword arguments to be passed to "ax.plot".
+        patch_kwds : keywords, default=None
+            Keyword arguments to be passed to "FancyArrowPatch". This is 
+            relevant when `draw_trend` is True.
 
         fill_kwds : keywords, default=None
             Keyword arguments to be passed to "ax.fill_between".
@@ -1821,6 +1898,9 @@ class TreeExplainer:
         by_class : bool, default=False
             If True, it displays probability density function for all 
             classes on x-axis, otherwise `X[var]`.
+            
+        draw_trend : bool, default=True
+            If True, a linear trend line is drawn.
 
         References
         ----------
@@ -1840,7 +1920,7 @@ class TreeExplainer:
                 "whis"        : whis, 
                 "kernel_kwds" : kernel_kwds, 
                 "scatter_kwds": scatter_kwds, 
-                "plot_kwds"   : plot_kwds, 
+                "patch_kwds"  : patch_kwds, 
                 "fill_kwds"   : fill_kwds, 
                 "colors"      : colors, 
                 "tight_layout": tight_layout, 
@@ -1848,12 +1928,13 @@ class TreeExplainer:
                 "random_state": random_state, 
                 "epsilon"     : epsilon, 
                 "by_class"    : by_class,
-                "classifier"  : self.classifier}
+                "classifier"  : self.classifier, 
+                "draw_trend"  : draw_trend}
         ax = scatter_base(*args, **kwds)
         return ax
         
     def boxplot(self, var, bins=None, ax=None, whis=1.5, colors=None, 
-                tight_layout=True):
+                tight_layout=True, by_class=False):
         
         '''
         Make a box and whisker plot using Matplotlib boxplot.
@@ -1865,7 +1946,9 @@ class TreeExplainer:
 
         bins : sequence of scalars
             Sequence of scalars must be a monotonically increasing array 
-            of bin edges, including the rightmost edge.
+            of bin edges, including the rightmost edge. The number belongs 
+            to ith bin when it saftifyies the following condition: bins[i] 
+            <= x < bins[i+1].
 
         ax : Matplotlib axis object, default=None
             Predefined Matplotlib axis. If None, it defaults to 
@@ -1879,12 +1962,15 @@ class TreeExplainer:
 
         colors : list of color-hex, default=None
             Color-hex must be arranged in the follwoing order i.e. 
-            ["Boxplot", "% Target"]. If None, it uses default colors from 
-            Matplotlib.
+            ["Class 0", "Class 1", "% Target"]. If None, it uses default 
+            colors from Matplotlib.
 
         tight_layout : bool, default=True
             If True, it adjusts the padding between and around subplots 
             i.e. plt.tight_layout().
+            
+        by_class : bool, default=False
+            If True, it displays box-plot for respective classes.
 
         References
         ----------
@@ -1902,6 +1988,7 @@ class TreeExplainer:
                 "whis"        : whis, 
                 "colors"      : colors, 
                 "tight_layout": tight_layout,
-                "classifier"  : self.classifier}
+                "classifier"  : self.classifier, 
+                "by_class"    : by_class}
         ax = boxplot_base(*args, **kwds)
         return ax
